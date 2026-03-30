@@ -15,9 +15,5 @@
       "src": "/(.*)",
       "dest": "api/index.py"
     }
-  ],
-  "env": {
-    "TELEGRAM_TOKEN": "@telegram_token",
-    "DATABASE_URL": "@database_url"
-  }
+  ]
 }
