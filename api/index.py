@@ -7,17 +7,15 @@ import psycopg2
 from flask import Flask, request
 
 # ---------------- CONFIG ----------------
-# ⚠️ TEMPORARY: For testing purposes only
-# These will be moved to environment variables after testing
-TOKEN = os.getenv("TELEGRAM_TOKEN", "7505333614:AAGAdECKNcmwnLf9iixeYYm8c6NmeQsv8Og")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://anas:40200%5%2@localhost:5432/razael")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Validate that required environment variables are set
-if not TOKEN or TOKEN == "":
-    raise ValueError("⚠️ TELEGRAM_TOKEN environment variable is not set!")
+if not TOKEN:
+    TOKEN = "7505333614:AAGAdECKNcmwnLf9iixeYYm8c6NmeQsv8Og"
+    print("⚠️ Using default TOKEN for testing")
 
-print(f"ℹ️ Bot initializing with TOKEN: {TOKEN[:20]}...")
-print(f"ℹ️ Database URL: {DATABASE_URL[:50] if DATABASE_URL else 'NOT SET'}...")
+if not DATABASE_URL:
+    print("⚠️ No DATABASE_URL set")
 
 ADMIN_GROUP_ID = -1002177227451
 ADMIN_TOPIC_ID = 460326
@@ -1040,32 +1038,21 @@ def show_profile(call):
 
 @bot.message_handler(commands=['start'])
 def start(m):
+    """Simple start handler"""
     try:
-        status = get_status(m.from_user.id)
-        if status == "blocked": return
-
+        # Send a simple welcome message
+        response = "🤖 أهلاً بك في نظام الإدارة!\n\nاختر من الخيارات أدناه:"
+        
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("📝 تقديم طلب انضمام", callback_data="start_apply"))
-
-        if status == "user":
-            try:
-                used = get_today_request_count(m.from_user.id)
-                remaining = max(0, 2 - used)
-                kb.add(types.InlineKeyboardButton(f"📌 المتبقي اليوم: {remaining}", callback_data="noop"))
-            except:
-                pass  # If database fails, skip this
-            
-            kb.add(types.InlineKeyboardButton("🗂️ سجل طلباتي", callback_data="my_history"))
-            kb.add(types.InlineKeyboardButton("🗑️ إلغاء طلب", callback_data="cancel_request"))
-
-        if status in ["admin", "owner"]: kb.add(types.InlineKeyboardButton("⚙️ لوحة الإدارة", callback_data="admin_panel"))
-        if status == "owner": kb.add(types.InlineKeyboardButton("👑 لوحة الأونر", callback_data="owner_panel"))
-
-        safe_send_message(m.chat.id, f"أهلاً بك في نظام الإدارة.\nرتبتك: {status.upper()}", reply_markup=kb)
+        kb.add(types.InlineKeyboardButton("📋 سجل طلباتي", callback_data="my_history"))
+        
+        bot.send_message(m.chat.id, response, reply_markup=kb)
+        print(f"✅ Sent /start to user {m.from_user.id}")
     except Exception as e:
-        print(f"❌ Error in start command: {e}")
+        print(f"❌ Error in /start: {e}")
         try:
-            bot.send_message(m.chat.id, "🤖 مرحباً! البوت يعمل ✅")
+            bot.send_message(m.chat.id, "🤖 مرحباً بك! البوت يعمل ✅")
         except:
             pass
 
@@ -1099,16 +1086,21 @@ def index():
         return {
             "status": "running",
             "message": "🤖 Telegram Bot is active and waiting for updates",
-            "webhook": f"POST {TOKEN}" if TOKEN else "Not configured"
+            "webhook": f"POST /{TOKEN}" if TOKEN else "Not configured"
         }, 200
     except Exception as e:
         print(f"❌ Health check error: {e}")
         return {"status": "error", "message": str(e)}, 500
 
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
+@app.route('/<token>', methods=['POST'])
+def webhook(token):
     """Webhook endpoint to receive Telegram updates"""
     try:
+        # Verify token
+        if token != TOKEN:
+            print(f"❌ Invalid token: {token}")
+            return {"error": "Invalid token"}, 403
+        
         json_string = request.stream.read().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
