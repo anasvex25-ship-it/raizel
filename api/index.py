@@ -7,8 +7,14 @@ import psycopg2
 from flask import Flask, request
 
 # ---------------- CONFIG ----------------
-TOKEN = os.getenv("TELEGRAM_TOKEN", "7505333614:AAGAdECKNcmwnLf9iixeYYm8c6NmeQsv8Og")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Validate that required environment variables are set
+if not TOKEN:
+    raise ValueError("⚠️ TELEGRAM_TOKEN environment variable is not set!")
+if not DATABASE_URL:
+    print("⚠️ WARNING: DATABASE_URL not set. Database features will not work.")
 
 ADMIN_GROUP_ID = -1002177227451
 ADMIN_TOPIC_ID = 460326
@@ -18,7 +24,12 @@ BOSS_GROUP_ID = -1001885837165
 
 OWNERS = [8083360929, 1486469878]
 
-bot = telebot.TeleBot(TOKEN)
+try:
+    bot = telebot.TeleBot(TOKEN)
+except Exception as e:
+    print(f"❌ Error initializing bot: {e}")
+    raise
+
 app = Flask(__name__)
 user_forms = {}
 
@@ -48,68 +59,88 @@ bot.answer_callback_query = safe_answer_callback
 
 # ---------------- DATABASE ----------------
 def get_db():
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL is not configured")
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     if not DATABASE_URL:
+        print("⚠️ DATABASE_URL not set - skipping database initialization")
         return
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)')
-    cur.execute('CREATE TABLE IF NOT EXISTS blocked (user_id BIGINT PRIMARY KEY)')
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS requests(
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT,
-        name TEXT,
-        age TEXT,
-        country TEXT,
-        time TEXT,
-        benefit TEXT,
-        prev TEXT,
-        mic TEXT,
-        date TEXT,
-        status TEXT,
-        decision_date TEXT,
-        admin_name TEXT,
-        message_id BIGINT,
-        request_text TEXT
-    )
-    ''')
-    cur.execute('CREATE TABLE IF NOT EXISTS announcement(id SERIAL PRIMARY KEY, message_id BIGINT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS spam_limit(user_id BIGINT, date TEXT)')
-    cur.execute('''
-    CREATE TABLE IF NOT EXISTS temp_punishments(
-        admin_id BIGINT PRIMARY KEY,
-        target_id BIGINT,
-        target_name TEXT,
-        target_username TEXT,
-        action_type TEXT,
-        duration TEXT,
-        reason TEXT
-    )
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)')
+        cur.execute('CREATE TABLE IF NOT EXISTS blocked (user_id BIGINT PRIMARY KEY)')
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS requests(
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            name TEXT,
+            age TEXT,
+            country TEXT,
+            time TEXT,
+            benefit TEXT,
+            prev TEXT,
+            mic TEXT,
+            date TEXT,
+            status TEXT,
+            decision_date TEXT,
+            admin_name TEXT,
+            message_id BIGINT,
+            request_text TEXT
+        )
+        ''')
+        cur.execute('CREATE TABLE IF NOT EXISTS announcement(id SERIAL PRIMARY KEY, message_id BIGINT)')
+        cur.execute('CREATE TABLE IF NOT EXISTS spam_limit(user_id BIGINT, date TEXT)')
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS temp_punishments(
+            admin_id BIGINT PRIMARY KEY,
+            target_id BIGINT,
+            target_name TEXT,
+            target_username TEXT,
+            action_type TEXT,
+            duration TEXT,
+            reason TEXT
+        )
+        ''')
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("✅ Database initialized successfully")
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
 
-init_db()
+# Initialize database on startup
+try:
+    init_db()
+except Exception as e:
+    print(f"⚠️ Warning: Could not initialize database on startup: {e}")
 
 # ---------------- STATUS ----------------
 def get_status(uid):
     if uid in OWNERS:
         return "owner"
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute('SELECT 1 FROM admins WHERE user_id=%s', (uid,))
-    if cur.fetchone():
+    
+    if not DATABASE_URL:
+        return "user"  # Default to user if no database
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute('SELECT 1 FROM admins WHERE user_id=%s', (uid,))
+        if cur.fetchone():
+            conn.close()
+            return "admin"
+        cur.execute('SELECT 1 FROM blocked WHERE user_id=%s', (uid,))
+        if cur.fetchone():
+            conn.close()
+            return "blocked"
         conn.close()
-        return "admin"
-    cur.execute('SELECT 1 FROM blocked WHERE user_id=%s', (uid,))
-    if cur.fetchone():
-        conn.close()
-        return "blocked"
-    conn.close()
+    except Exception as e:
+        print(f"❌ Error checking user status: {e}")
+    
     return "user"
 
 # ---------------- SPAM CHECK ----------------
@@ -1027,14 +1058,37 @@ def start(m):
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Bot is running perfectly on Vercel!"
+    """Health check endpoint"""
+    try:
+        return {
+            "status": "running",
+            "message": "🤖 Telegram Bot is active and waiting for updates",
+            "webhook": f"POST {TOKEN}" if TOKEN else "Not configured"
+        }, 200
+    except Exception as e:
+        print(f"❌ Health check error: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
-@app.route('/' + TOKEN, methods=['POST'])
+@app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    json_string = request.stream.read().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "!", 200
+    """Webhook endpoint to receive Telegram updates"""
+    try:
+        json_string = request.stream.read().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "OK", 200
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        return {"error": str(e)}, 500
+
+@app.errorhandler(404)
+def not_found(error):
+    return {"error": "Endpoint not found"}, 404
+
+@app.errorhandler(500)
+def server_error(error):
+    print(f"❌ Server error: {error}")
+    return {"error": "Internal server error"}, 500
 
 # To test locally:
 if __name__ == "__main__":
