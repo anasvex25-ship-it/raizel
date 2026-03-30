@@ -7,14 +7,17 @@ import psycopg2
 from flask import Flask, request
 
 # ---------------- CONFIG ----------------
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+# ⚠️ TEMPORARY: For testing purposes only
+# These will be moved to environment variables after testing
+TOKEN = os.getenv("TELEGRAM_TOKEN", "7505333614:AAGAdECKNcmwnLf9iixeYYm8c6NmeQsv8Og")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://anas:40200%5%2@localhost:5432/razael")
 
 # Validate that required environment variables are set
-if not TOKEN:
+if not TOKEN or TOKEN == "":
     raise ValueError("⚠️ TELEGRAM_TOKEN environment variable is not set!")
-if not DATABASE_URL:
-    print("⚠️ WARNING: DATABASE_URL not set. Database features will not work.")
+
+print(f"ℹ️ Bot initializing with TOKEN: {TOKEN[:20]}...")
+print(f"ℹ️ Database URL: {DATABASE_URL[:50] if DATABASE_URL else 'NOT SET'}...")
 
 ADMIN_GROUP_ID = -1002177227451
 ADMIN_TOPIC_ID = 460326
@@ -1037,23 +1040,56 @@ def show_profile(call):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    status = get_status(m.from_user.id)
-    if status == "blocked": return
+    try:
+        status = get_status(m.from_user.id)
+        if status == "blocked": return
 
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("📝 تقديم طلب انضمام", callback_data="start_apply"))
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("📝 تقديم طلب انضمام", callback_data="start_apply"))
 
-    if status == "user":
-        used = get_today_request_count(m.from_user.id)
-        remaining = max(0, 2 - used)
-        kb.add(types.InlineKeyboardButton(f"📌 المتبقي اليوم: {remaining}", callback_data="noop"))
-        kb.add(types.InlineKeyboardButton("🗂️ سجل طلباتي", callback_data="my_history"))
-        kb.add(types.InlineKeyboardButton("🗑️ إلغاء طلب", callback_data="cancel_request"))
+        if status == "user":
+            try:
+                used = get_today_request_count(m.from_user.id)
+                remaining = max(0, 2 - used)
+                kb.add(types.InlineKeyboardButton(f"📌 المتبقي اليوم: {remaining}", callback_data="noop"))
+            except:
+                pass  # If database fails, skip this
+            
+            kb.add(types.InlineKeyboardButton("🗂️ سجل طلباتي", callback_data="my_history"))
+            kb.add(types.InlineKeyboardButton("🗑️ إلغاء طلب", callback_data="cancel_request"))
 
-    if status in ["admin", "owner"]: kb.add(types.InlineKeyboardButton("⚙️ لوحة الإدارة", callback_data="admin_panel"))
-    if status == "owner": kb.add(types.InlineKeyboardButton("👑 لوحة الأونر", callback_data="owner_panel"))
+        if status in ["admin", "owner"]: kb.add(types.InlineKeyboardButton("⚙️ لوحة الإدارة", callback_data="admin_panel"))
+        if status == "owner": kb.add(types.InlineKeyboardButton("👑 لوحة الأونر", callback_data="owner_panel"))
 
-    safe_send_message(m.chat.id, f"أهلاً بك في نظام الإدارة.\nرتبتك: {status.upper()}", reply_markup=kb)
+        safe_send_message(m.chat.id, f"أهلاً بك في نظام الإدارة.\nرتبتك: {status.upper()}", reply_markup=kb)
+    except Exception as e:
+        print(f"❌ Error in start command: {e}")
+        try:
+            bot.send_message(m.chat.id, "🤖 مرحباً! البوت يعمل ✅")
+        except:
+            pass
+
+
+# Catch-all handler for any message
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """Handle any message that doesn't match other patterns"""
+    try:
+        if message.text == '/start':
+            return  # Already handled above
+        
+        # Just send a simple echo or help message
+        response = """
+🤖 مرحباً بك في البوت!
+
+الأوامر المتاحة:
+/start - القائمة الرئيسية
+
+لتقديم طلب الانضمام للإدارة، استخدم /start
+"""
+        bot.send_message(message.chat.id, response)
+    except Exception as e:
+        print(f"❌ Error handling message: {e}")
 
 
 @app.route('/', methods=['GET'])
